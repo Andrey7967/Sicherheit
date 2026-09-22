@@ -493,6 +493,7 @@ func (demo *DESDemo) Run() {
 	fmt.Println("Ключ:", key)
 	fmt.Println("Открытый текст:", rawPlaintext)
 	demo.des.SetKey(key)
+	
 
 	paddedPlaintext := padPKCS7(rawPlaintext, 8)
 	fullPlaintextHex := ""

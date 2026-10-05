@@ -1,0 +1,12 @@
+%%{init: {"theme":"base","themeVariables":{"primaryColor":"#ffffff","primaryTextColor":"#000000","primaryBorderColor":"#000000","lineColor":"#000000","secondaryColor":"#ffffff","tertiaryColor":"#ffffff","fontFamily":"Times New Roman","fontSize":"22px"},"flowchart":{"htmlLabels":false,"curve":"stepBefore","nodeSpacing":35,"rankSpacing":32,"padding":12},"themeCSS":".edgeLabel { background-color: white; } .node rect, .node polygon, .node path { stroke-width: 1.4px; }"}}%%
+flowchart TD
+ A(["Начало"]) --> B[/"Ввод 64-битового ключа K"/]
+ B --> C["Y = PC1(K)<br/>C = левые 28 бит Y<br/>D = правые 28 бит Y"]
+ C --> E{{"i = 1"}}
+ E --> F{"i ≤ 16?"}
+ F -->|Да| G["s = LS[i]<br/>C = циклический сдвиг C влево на s<br/>D = циклический сдвиг D влево на s"]
+ G --> H["K[i] = PC2(C ∥ D)"]
+ H --> I["Сохранить K[i]<br/>i = i + 1"]
+ I --> F
+ F -->|Нет| J[/"Вывод 16 подключей по 48 бит"/]
+ J --> K(["Конец"])

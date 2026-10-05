@@ -1,0 +1,11 @@
+%%{init: {"theme":"base","themeVariables":{"primaryColor":"#ffffff","primaryTextColor":"#000000","primaryBorderColor":"#000000","lineColor":"#000000","secondaryColor":"#ffffff","tertiaryColor":"#ffffff","fontFamily":"Times New Roman","fontSize":"22px"},"flowchart":{"htmlLabels":false,"curve":"stepBefore","nodeSpacing":35,"rankSpacing":32,"padding":12},"themeCSS":".edgeLabel { background-color: white; } .node rect, .node polygon, .node path { stroke-width: 1.4px; }"}}%%
+flowchart TD
+ A(["Начало"]) --> B[/"Ввод шифроблоков<br/>C[1]…C[n], K, IV"/]
+ B --> C{{"prev = IV; i = 1"}}
+ C --> D{"i ≤ n?"}
+ D -->|Да| E[["X = DES⁻¹(K, C[i])"]]
+ E --> F["M[i] = X XOR prev"]
+ F --> G["Добавить M[i] к результату<br/>prev = C[i]; i = i + 1"]
+ G --> D
+ D -->|Нет| H[/"Вывод открытых блоков<br/>с дополнением PKCS#7"/]
+ H --> I(["Конец"])

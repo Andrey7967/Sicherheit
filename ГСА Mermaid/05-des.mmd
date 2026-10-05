@@ -1,0 +1,17 @@
+%%{init: {"theme":"base","themeVariables":{"primaryColor":"#ffffff","primaryTextColor":"#000000","primaryBorderColor":"#000000","lineColor":"#000000","secondaryColor":"#ffffff","tertiaryColor":"#ffffff","fontFamily":"Times New Roman","fontSize":"22px"},"flowchart":{"htmlLabels":false,"curve":"stepBefore","nodeSpacing":35,"rankSpacing":32,"padding":12},"themeCSS":".edgeLabel { background-color: white; } .node rect, .node polygon, .node path { stroke-width: 1.4px; }"}}%%
+flowchart TD
+ A(["Начало"]) --> B[/"Ввод 64-битового блока X<br/>подключей K[1]…K[16]<br/>и признака decrypt"/]
+ B --> C["Y = IP(X)<br/>L = левая половина Y<br/>R = правая половина Y"]
+ C --> D{{"i = 1"}}
+ D --> E{"i ≤ 16?"}
+ E -->|Да| F{"decrypt = true?"}
+ F -->|Да| G["k = 17 − i"]
+ F -->|Нет| H["k = i"]
+ G --> J[["F = f(R, K[k])<br/>E, XOR, S₁…S₈, P"]]
+ H --> J
+ J --> K["Lnew = R<br/>Rnew = L XOR F"]
+ K --> N["L = Lnew; R = Rnew<br/>i = i + 1"]
+ N --> E
+ E -->|Нет| O["Z = IP⁻¹(R ∥ L)"]
+ O --> Q[/"Вывод 64-битового блока Z"/]
+ Q --> T(["Конец"])

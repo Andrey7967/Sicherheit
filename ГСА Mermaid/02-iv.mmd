@@ -1,0 +1,10 @@
+%%{init: {"theme":"base","themeVariables":{"primaryColor":"#ffffff","primaryTextColor":"#000000","primaryBorderColor":"#000000","lineColor":"#000000","secondaryColor":"#ffffff","tertiaryColor":"#ffffff","fontFamily":"Times New Roman","fontSize":"22px"},"flowchart":{"htmlLabels":false,"curve":"stepBefore","nodeSpacing":35,"rankSpacing":32,"padding":12},"themeCSS":".edgeLabel { background-color: white; } .node rect, .node polygon, .node path { stroke-width: 1.4px; }"}}%%
+flowchart TD
+ A(["Начало"]) --> B{{"A = 21; C = 33; B = 256<br/>T = 20; j = 0"}}
+ B --> C{"j ≤ 7?"}
+ C -->|Да| D["IV[j] = T"]
+ D --> E["T = (21 · T + 33) mod 256"]
+ E --> F["j = j + 1"]
+ F --> C
+ C -->|Нет| G[/"Вывод 8 байтов IV<br/>14C54A3350B1A6BF"/]
+ G --> H(["Конец"])

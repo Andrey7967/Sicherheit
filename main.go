@@ -2,6 +2,9 @@ package main
 
 import (
 	"bufio"
+	"encoding/hex"
+	"errors"
+	"flag"
 
 	"fmt"
 	"os"
@@ -31,20 +34,20 @@ func (ba *BitArray) Size() int {
 }
 
 func (ba *BitArray) Get(index int) bool {
-	if index >= len(ba.bits) {
+	if index < 0 || index >= len(ba.bits) {
 		return false
 	}
 	return ba.bits[index]
 }
 
 func (ba *BitArray) Set(index int, value bool) {
-	if index < len(ba.bits) {
+	if index >= 0 && index < len(ba.bits) {
 		ba.bits[index] = value
 	}
 }
 
 func (ba *BitArray) Flip(index int) {
-	if index < len(ba.bits) {
+	if index >= 0 && index < len(ba.bits) {
 		ba.bits[index] = !ba.bits[index]
 	}
 }
@@ -77,7 +80,7 @@ func (ba *BitArray) CyclicLeftShift(positions int) {
 	if len(ba.bits) == 0 {
 		return
 	}
-	positions %= len(ba.bits)
+	positions = (positions%len(ba.bits) + len(ba.bits)) % len(ba.bits)
 	newBits := make([]bool, len(ba.bits))
 	for i := 0; i < len(ba.bits); i++ {
 		newBits[i] = ba.bits[(i+positions)%len(ba.bits)]
@@ -227,8 +230,8 @@ var (
 		{
 			{13, 2, 8, 4, 6, 15, 11, 1, 10, 9, 3, 14, 5, 0, 12, 7},
 			{1, 15, 13, 8, 10, 3, 7, 4, 12, 5, 6, 11, 0, 14, 9, 2},
-			{7, 11, 4, 1, 9, 12, 14, 2, 0, 6, 10, 13, 15, 13, 5, 8},
-			{2, 1, 14, 7, 4, 10, 8, 13, 5, 12, 9, 0, 3, 5, 5, 11},
+			{7, 11, 4, 1, 9, 12, 14, 2, 0, 6, 10, 13, 15, 3, 5, 8},
+			{2, 1, 14, 7, 4, 10, 8, 13, 15, 12, 9, 0, 3, 5, 6, 11},
 		},
 	}
 )
@@ -243,6 +246,7 @@ func NewDES() *DES {
 	}
 }
 
+// applyPermutation использует нумерацию таблиц DES с единицы.
 func (d *DES) applyPermutation(input *BitArray, table []int, outputSize int) *BitArray {
 	output := NewBitArray(outputSize)
 	for i := 0; i < outputSize; i++ {
@@ -251,6 +255,7 @@ func (d *DES) applyPermutation(input *BitArray, table []int, outputSize int) *Bi
 	return output
 }
 
+// f расширяет R до 48 бит, выполняет XOR с ключом, S-подстановки и P.
 func (d *DES) f(R, K *BitArray) *BitArray {
 	expanded := d.applyPermutation(R, E[:], 48)
 	xored := expanded.XOR(K)
@@ -283,6 +288,7 @@ func (d *DES) f(R, K *BitArray) *BitArray {
 	return d.applyPermutation(sboxOutput, P[:], 32)
 }
 
+// generateSubkeys удаляет биты чётности PC1 и строит 16 ключей через LS и PC2.
 func (d *DES) generateSubkeys(key *BitArray) {
 	d.subkeys = make([]*BitArray, 0, 16)
 	permutedKey := d.applyPermutation(key, PC1[:], 56)
@@ -307,6 +313,8 @@ func (d *DES) generateSubkeys(key *BitArray) {
 	}
 }
 
+// encryptBlock выполняет IP, 16 раундов Фейстеля, обмен половин и IP^-1.
+// Дешифрование отличается только обратным порядком раундовых ключей.
 func (d *DES) encryptBlock(block *BitArray, decrypt bool) *BitArray {
 	permuted := d.applyPermutation(block, IP[:], 64)
 
@@ -334,227 +342,224 @@ func (d *DES) encryptBlock(block *BitArray, decrypt bool) *BitArray {
 	return d.applyPermutation(combined, IP_1[:], 64)
 }
 
-func (d *DES) SetKey(hexKey string) {
-	key := NewBitArrayFromHex(hexKey)
-	d.generateSubkeys(key)
+// validateHex проверяет HEX и длину до обращения к битам или срезам.
+func validateHex(value string, blockChars int, single bool) error {
+	if len(value) == 0 || len(value)%blockChars != 0 || (single && len(value) != blockChars) {
+		return fmt.Errorf("ожидается %d HEX-символов на блок", blockChars)
+	}
+	if _, err := hex.DecodeString(value); err != nil {
+		return fmt.Errorf("некорректный HEX: %w", err)
+	}
+	return nil
 }
 
-func (d *DES) EncryptBlock(hexPlaintext string) string {
-	plaintext := NewBitArrayFromHex(hexPlaintext)
-	ciphertext := d.encryptBlock(plaintext, false)
-	return ciphertext.ToHex()
+// SetKey принимает 64-битовый ключ, включая восемь битов чётности.
+func (d *DES) SetKey(key string) error {
+	if err := validateHex(key, 16, true); err != nil {
+		return err
+	}
+	d.generateSubkeys(NewBitArrayFromHex(key))
+	return nil
 }
 
-func (d *DES) DecryptBlock(hexCiphertext string) string {
-	ciphertext := NewBitArrayFromHex(hexCiphertext)
-	plaintext := d.encryptBlock(ciphertext, true)
-	return plaintext.ToHex()
-}
-
-func (d *DES) FlipBit(hexCiphertext string, bitPosition int) string {
-	ciphertext := NewBitArrayFromHex(hexCiphertext)
-	ciphertext.Flip(bitPosition)
-	return ciphertext.ToHex()
-}
-
-// ==========================================
-// НОВОЕ для Лабы 5: Реализация режима CBC
-// ==========================================
-
-// EncryptCBC шифрует всю строку (в HEX, кратную 16 символам) в режиме CBC
-func (d *DES) EncryptCBC(hexPlaintext string, hexIV string) string {
+// cryptCBC обрабатывает полные блоки; дополнение добавляется отдельно.
+func (d *DES) cryptCBC(data, iv string, decrypt bool) (string, error) {
+	if len(d.subkeys) != 16 {
+		return "", errors.New("ключ DES не установлен")
+	}
+	if err := validateHex(data, 16, false); err != nil {
+		return "", err
+	}
+	if err := validateHex(iv, 16, true); err != nil {
+		return "", err
+	}
+	previous := NewBitArrayFromHex(iv)
 	var result strings.Builder
-	prevCipherBlock := NewBitArrayFromHex(hexIV)
-
-	for i := 0; i < len(hexPlaintext); i += 16 {
-		plainBlock := NewBitArrayFromHex(hexPlaintext[i : i+16])
-		
-		// 1. P_i XOR C_{i-1} (сцепление блоков)
-		xored := plainBlock.XOR(prevCipherBlock)
-		
-		// 2. Шифрование блока
-		cipherBlock := d.encryptBlock(xored, false)
-		
-		result.WriteString(cipherBlock.ToHex())
-		prevCipherBlock = cipherBlock // запоминаем для следующего шага
-	}
-	return result.String()
-}
-
-// DecryptCBC дешифрует всю строку (в HEX) в режиме CBC
-func (d *DES) DecryptCBC(hexCiphertext string, hexIV string) string {
-	var result strings.Builder
-	prevCipherBlock := NewBitArrayFromHex(hexIV)
-
-	for i := 0; i < len(hexCiphertext); i += 16 {
-		cipherBlock := NewBitArrayFromHex(hexCiphertext[i : i+16])
-		
-		// 1. Дешифрование блока
-		decrypted := d.encryptBlock(cipherBlock, true)
-		
-		// 2. D(C_i) XOR C_{i-1} (восстановление открытого текста)
-		plainBlock := decrypted.XOR(prevCipherBlock)
-		
-		result.WriteString(plainBlock.ToHex())
-		prevCipherBlock = cipherBlock // запоминаем оригинальный зашифрованный блок
-	}
-	return result.String()
-}
-
-// ==========================================
-// Вспомогательные функции
-// ==========================================
-
-func stringToHex(input string) string {
-	const hexUpper = "0123456789ABCDEF"
-	var sb strings.Builder
-	sb.Grow(len(input) * 2)
-	for i := 0; i < len(input); i++ {
-		c := input[i]
-		sb.WriteByte(hexUpper[c>>4])
-		sb.WriteByte(hexUpper[c&0x0F])
-	}
-	return sb.String()
-}
-
-func hexToString(input string) string {
-    bytes := make([]byte, len(input)/2)
-    for i := 0; i < len(input); i += 2 {
-        var b byte
-        fmt.Sscanf(input[i:i+2], "%X", &b)
-        bytes[i/2] = b
-    }
-    return string(bytes)
-}
-
-func padPKCS7(input string, blockSize int) string {
-	paddingLen := blockSize - (len(input) % blockSize)
-	padding := strings.Repeat(string(rune(paddingLen)), paddingLen)
-	return input + padding
-}
-
-// ==========================================
-// Демонстрация работы Лабы 5
-// ==========================================
-
-type DESDemo struct {
-	des *DES
-}
-
-func NewDESDemo() *DESDemo {
-	return &DESDemo{des: NewDES()}
-}
-
-func (demo *DESDemo) Run() {
-	scanner := bufio.NewScanner(os.Stdin)
-
-	fmt.Println("=========================================================")
-	fmt.Println("ЛАБОРАТОРНАЯ РАБОТА 5: Режимы работы блочных шифров (CBC)")
-	fmt.Println("=========================================================\n")
-
-	key := "133457799BBCDFF1"
-	iv :=  "AABBCCDDEEFF0011" // Вектор инициализации (IV)
-
-	fmt.Println("Ключ (HEX):", key)
-	fmt.Println("Вектор инициализации IV (HEX):", iv)
-	demo.des.SetKey(key)
-
-	// Специально подбираем текст с повторяющимися паттернами для наглядности
-	defaultText := "СЕКРЕТ!!СЕКРЕТ!!" 
-	fmt.Printf("\nВведите открытый текст (или нажмите Enter для '%s'):\n> ", defaultText)
-
-	rawPlaintext := ""
-	if scanner.Scan() {
-		rawPlaintext = scanner.Text()
-	}
-	if rawPlaintext == "" {
-		rawPlaintext = defaultText
-	}
-
-	paddedPlaintext := padPKCS7(rawPlaintext, 8)
-	fullPlaintextHex := stringToHex(paddedPlaintext)
-
-	fmt.Println("\nОткрытый текст (HEX):", fullPlaintextHex)
-
-	// ---------------------------------------------------------
-	// ЧАСТЬ 1: Демонстрация уязвимости ECB
-	// ---------------------------------------------------------
-	fmt.Println("\n--- 1. Режим ECB (Electronic Codebook) ---")
-	var ecbCiphertext strings.Builder
-	for i := 0; i < len(fullPlaintextHex); i += 16 {
-		block := fullPlaintextHex[i : i+16]
-		encrypted := demo.des.EncryptBlock(block)
-		ecbCiphertext.WriteString(encrypted)
-		fmt.Printf("Блок P[%d] = %s -> C[%d] = %s\n", i/16+1, block, i/16+1, encrypted)
-	}
-	fmt.Println("Итоговый шифротекст (ECB):", ecbCiphertext.String())
-	fmt.Println("! ОБРАТИТЕ ВНИМАНИЕ: Одинаковые блоки текста (если они есть) дают одинаковые блоки шифротекста.")
-
-	// ---------------------------------------------------------
-	// ЧАСТЬ 2: Демонстрация защиты CBC
-	// ---------------------------------------------------------
-	fmt.Println("\n--- 2. Режим CBC (Cipher Block Chaining) ---")
-	cbcCiphertextHex := demo.des.EncryptCBC(fullPlaintextHex, iv)
-	
-	for i := 0; i < len(cbcCiphertextHex); i += 16 {
-		fmt.Printf("Блок C[%d] = %s\n", i/16+1, cbcCiphertextHex[i:i+16])
-	}
-	fmt.Println("Итоговый шифротекст (CBC):", cbcCiphertextHex)
-	fmt.Println("! ОБРАТИТЕ ВНИМАНИЕ: Паттерны скрыты. Одинаковые блоки открытого текста дают разный шифротекст.")
-
-	cbcDecryptedHex := demo.des.DecryptCBC(cbcCiphertextHex, iv)
-	fmt.Println("Расшифрованный текст (HEX):", cbcDecryptedHex)
-	if fullPlaintextHex == cbcDecryptedHex {
-		fmt.Println("Статус дешифрования CBC: УСПЕХ (Текст совпадает)")
-	}
-
-	// ---------------------------------------------------------
-	// ЧАСТЬ 3: Распространение ошибки (Лавинный эффект в CBC)
-	// ---------------------------------------------------------
-	fmt.Println("\n--- 3. Распространение ошибки (искажение канала связи) в CBC ---")
-	
-	if len(cbcCiphertextHex) >= 32 { // нужно минимум 2 блока
-		// Искажаем 10-й бит в ПЕРВОМ блоке шифротекста
-		fmt.Println("Изменим 1 бит (10-й бит) в ПЕРВОМ блоке зашифрованного текста...")
-		
-		// Извлекаем первый блок и меняем бит
-		firstBlockModified := demo.des.FlipBit(cbcCiphertextHex[:16], 10)
-		modifiedCbcCiphertext := firstBlockModified + cbcCiphertextHex[16:]
-		
-		fmt.Println("Оригинальный шифротекст: ", cbcCiphertextHex)
-		fmt.Println("Искаженный шифротекст:   ", modifiedCbcCiphertext)
-
-		// Пытаемся расшифровать
-		corruptedDecryptedHex := demo.des.DecryptCBC(modifiedCbcCiphertext, iv)
-		fmt.Println("\nРезультат расшифровки (HEX):")
-		fmt.Println("Ожидалось: ", fullPlaintextHex)
-		fmt.Println("Получилось:", corruptedDecryptedHex)
-		
-		// Анализируем блоки
-		origBlock1 := NewBitArrayFromHex(fullPlaintextHex[:16])
-		corrBlock1 := NewBitArrayFromHex(corruptedDecryptedHex[:16])
-		diff1 := 0
-		for i := 0; i < origBlock1.Size(); i++ {
-			if origBlock1.Get(i) != corrBlock1.Get(i) { diff1++ }
+	for i := 0; i < len(data); i += 16 {
+		block := NewBitArrayFromHex(data[i : i+16])
+		if decrypt {
+			// M_i = D_K(C_i) XOR C_(i-1); в буфер идёт исходный C_i.
+			result.WriteString(d.encryptBlock(block, true).XOR(previous).ToHex())
+			previous = block
+		} else {
+			// C_i = E_K(M_i XOR C_(i-1)); первый предыдущий блок равен IV.
+			previous = d.encryptBlock(block.XOR(previous), false)
+			result.WriteString(previous.ToHex())
 		}
-
-		origBlock2 := NewBitArrayFromHex(fullPlaintextHex[16:32])
-		corrBlock2 := NewBitArrayFromHex(corruptedDecryptedHex[16:32])
-		diff2 := 0
-		for i := 0; i < origBlock2.Size(); i++ {
-			if origBlock2.Get(i) != corrBlock2.Get(i) { diff2++ }
-		}
-
-		fmt.Printf("\nАнализ ошибок:\n")
-		fmt.Printf("- Блок 1 поврежден сильно (лавинный эффект): изменилось %d бит из 64\n", diff1)
-		fmt.Printf("- Блок 2 изменен точечно (XOR с предыдущим): изменилось %d бит из 64\n", diff2)
-		fmt.Println("- Остальные блоки (если есть) расшифруются без ошибок.")
-	} else {
-		fmt.Println("Для демонстрации лавинного эффекта в CBC текст должен быть длиннее 8 символов.")
 	}
+	return result.String(), nil
+}
+
+func (d *DES) EncryptCBC(data, iv string) (string, error) {
+	return d.cryptCBC(data, iv, false)
+}
+func (d *DES) DecryptCBC(data, iv string) (string, error) {
+	return d.cryptCBC(data, iv, true)
+}
+
+// generateIV повторяет датчик лабораторной №3 для варианта 25 (строка 5).
+// Сначала выдаётся T(0), затем T(i+1)=(21*T(i)+33) mod 256.
+func generateIV() string {
+	iv := make([]byte, 8)
+	state := 20
+	for i := range iv {
+		iv[i] = byte(state)
+		state = (21*state + 33) % 256
+	}
+	return strings.ToUpper(hex.EncodeToString(iv))
+}
+
+func stringToHex(text string) string {
+	return strings.ToUpper(hex.EncodeToString([]byte(text)))
+}
+
+// padPKCS7 дополняет байты UTF-8; даже кратная 8 длина получает полный блок.
+func padPKCS7(text string) string {
+	n := 8 - len(text)%8
+	return text + strings.Repeat(string([]byte{byte(n)}), n)
+}
+
+// unpadPKCS7 проверяет все байты дополнения перед восстановлением текста.
+func unpadPKCS7(text string) (string, error) {
+	if len(text) == 0 || len(text)%8 != 0 {
+		return "", errors.New("неверная длина PKCS#7")
+	}
+	n := int(text[len(text)-1])
+	if n < 1 || n > 8 {
+		return "", errors.New("неверная длина дополнения")
+	}
+	for i := len(text) - n; i < len(text); i++ {
+		if int(text[i]) != n {
+			return "", errors.New("повреждены байты дополнения")
+		}
+	}
+	return text[:len(text)-n], nil
+}
+
+// flipBit нумерует биты с нуля, от старшего бита первого байта.
+func flipBit(data string, position int) (string, error) {
+	raw, err := hex.DecodeString(data)
+	if err != nil {
+		return "", err
+	}
+	if position < 0 || position >= len(raw)*8 {
+		return "", errors.New("бит вне шифрограммы")
+	}
+	raw[position/8] ^= byte(1 << (7 - position%8))
+	return strings.ToUpper(hex.EncodeToString(raw)), nil
+}
+
+func countDifferentBits(a, b string) int {
+	left, right := NewBitArrayFromHex(a), NewBitArrayFromHex(b)
+	count := 0
+	for i := 0; i < left.Size(); i++ {
+		if left.Get(i) != right.Get(i) {
+			count++
+		}
+	}
+	return count
+}
+
+// experiment показывает шифрование, восстановление и распространение ошибки.
+func experiment(d *DES, text, iv string, bit int) error {
+	plain := stringToHex(padPKCS7(text))
+	encrypted, err := d.EncryptCBC(plain, iv)
+	if err != nil {
+		return err
+	}
+	recovered, err := d.DecryptCBC(encrypted, iv)
+	if err != nil {
+		return err
+	}
+	raw, err := hex.DecodeString(recovered)
+	if err != nil {
+		return err
+	}
+	restored, err := unpadPKCS7(string(raw))
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Открытый текст: %q\nОткрытый текст с PKCS#7 (HEX): %s\n", text, plain)
+	fmt.Println("Шифрограмма CBC (HEX):", encrypted)
+	fmt.Printf("Восстановленный текст: %q\nСовпадение: %t\n", restored, restored == text)
+	if recovered != plain || restored != text {
+		return errors.New("текст не восстановлен")
+	}
+	fmt.Println("Поблочное сравнение (64 бита):")
+	for i := 0; i < len(plain); i += 16 {
+		fmt.Printf("M[%d]=%s C[%d]=%s\n", i/16+1, plain[i:i+16], i/16+1, encrypted[i:i+16])
+	}
+	changed, err := flipBit(encrypted, bit)
+	if err != nil {
+		return err
+	}
+	damaged, err := d.DecryptCBC(changed, iv)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Изменён бит с индексом %d (нумерация с 0).\n", bit)
+	fmt.Println("Искажённая шифрограмма (HEX):", changed)
+	// HEX сохраняет все повреждённые байты, в том числе недопустимые в UTF-8.
+	fmt.Println("Искажённый открытый текст с дополнением (HEX):", damaged)
+	for i := 0; i < len(plain); i += 16 {
+		fmt.Printf("Блок %d: изменилось %d из 64 бит\n", i/16+1,
+			countDifferentBits(plain[i:i+16], damaged[i:i+16]))
+	}
+	if len(plain) >= 32 && plain[:16] == plain[16:32] {
+		fmt.Printf("M[1]=M[2]: true; C[1]=C[2]: %t\n", encrypted[:16] == encrypted[16:32])
+	}
+	return nil
+}
+
+func run() error {
+	text := flag.String("text", "", "открытый текст; без флага вводится с клавиатуры")
+	key := flag.String("key", "133457799BBCDFF1", "ключ из 16 HEX-символов")
+	bit := flag.Int("bit", 10, "индекс изменяемого бита, начиная с нуля")
+	flag.Parse()
+	supplied := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "text" {
+			supplied = true
+		}
+	})
+	if !supplied {
+		fmt.Println("Введите открытый текст (Enter — пример ABCDEFGHABCDEFGH12345678):")
+		scanner := bufio.NewScanner(os.Stdin)
+		scanner.Buffer(make([]byte, 4096), 4*1024*1024)
+		if scanner.Scan() {
+			*text = scanner.Text()
+		}
+		if err := scanner.Err(); err != nil {
+			return err
+		}
+		if *text == "" {
+			*text = "ABCDEFGHABCDEFGH12345678"
+		}
+	}
+	d := NewDES()
+	if err := d.SetKey(*key); err != nil {
+		return err
+	}
+	iv := generateIV()
+	fmt.Println("Лабораторная работа №5. DES CBC. Вариант 25")
+	fmt.Println("ПСЧ: A=21 C=33 T(0)=20 B=256; IV=T(0)..T(7)")
+	fmt.Println("Ключ (HEX):", strings.ToUpper(*key))
+	fmt.Println("IV (HEX):", iv)
+	// Для короткого произвольного ввода показываем ошибку в его пределах.
+	// Для отдельных опытов ниже используются минимум три полных блока.
+	if err := experiment(d, *text, iv, *bit); err != nil {
+		return err
+	}
+	if *text != "ABCDEFGHABCDEFGH12345678" {
+		fmt.Println("\nОтдельный опыт: идентичные блоки и ошибка в первом блоке")
+		return experiment(d, "ABCDEFGHABCDEFGH12345678", iv, 10)
+	}
+	return nil
 }
 
 func main() {
-	demo := NewDESDemo()
-	demo.Run()
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, "Ошибка:", err)
+		os.Exit(1)
+	}
 }

@@ -1,0 +1,10 @@
+%%{init: {"theme":"base","themeVariables":{"primaryColor":"#ffffff","primaryTextColor":"#000000","primaryBorderColor":"#000000","lineColor":"#000000","secondaryColor":"#ffffff","tertiaryColor":"#ffffff","fontFamily":"Times New Roman","fontSize":"22px"},"flowchart":{"htmlLabels":false,"curve":"stepBefore","nodeSpacing":35,"rankSpacing":32,"padding":12},"themeCSS":".edgeLabel { background-color: white; } .node rect, .node polygon, .node path { stroke-width: 1.4px; }"}}%%
+flowchart TD
+ A(["Начало"]) --> B[/"Ввод текста, ключа K<br/>и индекса бита b"/]
+ B --> C[["Проверка ключа<br/>Генерация подключей DES"]]
+ C --> E[["Генерация IV<br/>для варианта 25"]]
+ E --> F[["Опыт с введённым текстом<br/>CBC, восстановление,<br/>искажение бита и сравнение"]]
+ F --> H{"Текст равен<br/>демонстрационному?"}
+ H -->|Нет| I[["Опыт с текстом<br/>ABCDEFGHABCDEFGH12345678<br/>и битом b = 10"]]
+ I --> K(["Конец"])
+ H -->|Да| K

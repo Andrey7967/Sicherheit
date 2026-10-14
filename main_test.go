@@ -88,10 +88,67 @@ func TestVariantIVAndErrorPropagation(t *testing.T) {
 		if countDifferentBits(plain[(block+1)*16:(block+2)*16], back[(block+1)*16:(block+2)*16]) != 1 {
 			t.Fatal(bit)
 		}
+		expectedNext, err := flipBit(plain[(block+1)*16:(block+2)*16], bit%64)
+		if err != nil || back[(block+1)*16:(block+2)*16] != expectedNext {
+			t.Fatalf("ошибка должна появиться в той же позиции: бит %d", bit)
+		}
 		for i := 0; i < 4; i++ {
 			if i != block && i != block+1 && plain[i*16:(i+1)*16] != back[i*16:(i+1)*16] {
 				t.Fatal(bit, i)
 			}
+		}
+	}
+}
+
+// Проверка полного пути, включая UTF-8, нулевые байты и полный блок дополнения.
+func TestTextRoundTrip(t *testing.T) {
+	d := NewDES()
+	if err := d.SetKey("133457799BBCDFF1"); err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{"", "a", "ABCDEFGH", "Привет, мир!", "🙂\x00", "Первая строка\nВторая строка"} {
+		encrypted, err := d.EncryptCBC(stringToHex(padPKCS7(text)), generateIV())
+		if err != nil {
+			t.Fatal(err)
+		}
+		back, err := d.DecryptCBC(encrypted, generateIV())
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := hex.DecodeString(back)
+		if err != nil {
+			t.Fatal(err)
+		}
+		restored, err := unpadPKCS7(string(raw))
+		if err != nil || restored != text {
+			t.Fatalf("полное восстановление %q: %v", text, err)
+		}
+	}
+}
+
+func TestCBCBoundaryErrors(t *testing.T) {
+	d := NewDES()
+	if err := d.SetKey("133457799BBCDFF1"); err != nil {
+		t.Fatal(err)
+	}
+	plain := stringToHex(padPKCS7("ABCDEFGHABCDEFGH12345678"))
+	encrypted, err := d.EncryptCBC(plain, generateIV())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Изменение IV инвертирует тот же бит только первого открытого блока.
+	changedIV, _ := flipBit(generateIV(), 10)
+	back, err := d.DecryptCBC(encrypted, changedIV)
+	expected, _ := flipBit(plain, 10)
+	if err != nil || back != expected {
+		t.Fatalf("изменение IV: %v", err)
+	}
+	// Ошибка в последнем шифроблоке не затрагивает предыдущие блоки.
+	for bit := 192; bit < 256; bit++ {
+		changed, _ := flipBit(encrypted, bit)
+		back, err := d.DecryptCBC(changed, generateIV())
+		if err != nil || back[:48] != plain[:48] || back[48:] == plain[48:] {
+			t.Fatalf("последний блок, бит %d: %v", bit, err)
 		}
 	}
 }

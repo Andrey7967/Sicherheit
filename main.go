@@ -2,130 +2,186 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"errors"
+	"flag"
 	"fmt"
+	"math/bits"
 	"os"
 	"strings"
 )
 
-// ==========================================
-// Структура GammaCipher и методы (Лаба 6)
-// ==========================================
+const demoText = "ABCDEFGHABCDEFGH12345678abcdefghijklmnop"
 
-type GammaCipher struct {
-	a        int // Множитель (Multiplier)
-	c        int // Приращение (Increment)
-	b        int // Модуль (Modulus), равный количеству значений в 1 байте
-	t0       int // Начальное значение (seed)
-	tCurrent int // Текущее состояние генератора
-}
-
-// NewGammaCipher создает новый экземпляр шифратора
-func NewGammaCipher(t0 int) *GammaCipher {
-	return &GammaCipher{
-		a:        21,
-		c:        33,
-		b:        256,
-		t0:       t0,
-		tCurrent: t0,
+// GenerateIV выдаёт T(0)..T(7) датчика варианта 25.
+func GenerateIV() []byte {
+	iv := make([]byte, 8)
+	state := 20
+	for i := range iv {
+		iv[i] = byte(state)
+		state = (21*state + 33) % 256
 	}
+	return iv
 }
 
-// Reset сбрасывает состояние генератора к исходному значению t0.
-// Это необходимо для синхронизации генератора перед началом дешифрования.
-func (gc *GammaCipher) Reset() {
-	gc.tCurrent = gc.t0
+func getBit(data []byte, position int) uint64 {
+	return uint64((data[position/8] >> uint(7-position%8)) & 1)
 }
 
-// GenerateGamma генерирует псевдослучайную последовательность (гамму) заданной длины
-func (gc *GammaCipher) GenerateGamma(length int) []int {
-	gamma := make([]int, length)
-	for i := 0; i < length; i++ {
-		gamma[i] = gc.tCurrent
-		// Вычисляем следующее состояние по формуле ЛКГ: T_{i+1} = (A * T_i + C) mod B
-		gc.tCurrent = (gc.a*gc.tCurrent + gc.c) % gc.b
+// CryptCFB использует прямое DES в обоих направлениях и обратную связь
+// по шифртексту. Последний сегмент может быть короче k; дополнение не нужно.
+func (d *DES) CryptCFB(data, iv []byte, k int, decrypt bool) ([]byte, error) {
+	if d == nil {
+		return nil, errors.New("ключ DES не установлен")
 	}
-	return gamma
-}
-
-// Encrypt шифрует открытый текст методом наложения гаммы и возвращает шифртекст и саму гамму
-func (gc *GammaCipher) Encrypt(text string) (string, []int) {
-	// Генерируем гамму длиной, равной количеству байт открытого текста
-	gamma := gc.GenerateGamma(len(text))
-	var cipherBuilder strings.Builder
-	cipherBuilder.Grow(len(text))
-
-	for i := 0; i < len(text); i++ {
-		x := int(text[i]) // Берем код байта открытого текста
-		// Накладываем гамму: C_i = (P_i + Gamma_i) mod 256
-		y := (x + gamma[i]) % 256
-		cipherBuilder.WriteByte(byte(y))
+	if len(iv) != 8 {
+		return nil, errors.New("начальный вектор должен содержать 8 байтов")
 	}
-
-	return cipherBuilder.String(), gamma
-}
-
-// Decrypt дешифрует шифртекст с использованием сгенерированной гаммы
-func (gc *GammaCipher) Decrypt(cipher string, gamma []int) string {
-	var textBuilder strings.Builder
-	textBuilder.Grow(len(cipher))
-
-	for i := 0; i < len(cipher); i++ {
-		y := int(cipher[i]) // Берем код зашифрованного байта
-		// Снимаем гамму: P_i = (C_i - Gamma_i + 256) mod 256
-		x := (y - gamma[i] + 256) % 256
-		textBuilder.WriteByte(byte(x))
+	if k < 2 || k > 62 {
+		return nil, errors.New("размер сегмента должен быть от 2 до 62 бит")
 	}
-
-	return textBuilder.String()
+	var register uint64
+	for _, b := range iv {
+		register = register<<8 | uint64(b)
+	}
+	result := make([]byte, len(data))
+	for offset := 0; offset < len(data)*8; offset += k {
+		size := k
+		if remaining := len(data)*8 - offset; remaining < size {
+			size = remaining
+		}
+		stream := d.EncryptBlock(register)
+		var ciphertext uint64
+		for j := 0; j < size; j++ {
+			input := getBit(data, offset+j)
+			output := input ^ ((stream >> uint(63-j)) & 1)
+			result[(offset+j)/8] |= byte(output) << uint(7-(offset+j)%8)
+			feedback := output
+			if decrypt {
+				feedback = input
+			}
+			ciphertext = ciphertext<<1 | feedback
+		}
+		// Сдвиг не циклический: вытесненные старшие биты отбрасываются.
+		register = register<<uint(size) | ciphertext
+	}
+	return result, nil
 }
 
-// ==========================================
-// Демонстрация работы Лабы 6
-// ==========================================
+func flipBit(data []byte, position int) ([]byte, error) {
+	if position < 0 || position >= len(data)*8 {
+		return nil, errors.New("индекс изменяемого бита вне шифрограммы")
+	}
+	result := append([]byte(nil), data...)
+	result[position/8] ^= 1 << uint(7-position%8)
+	return result, nil
+}
 
-func main() {
-	fmt.Println("=========================================================")
-	fmt.Println("ЛАБОРАТОРНАЯ РАБОТА 6: Шифрование методом гаммирования")
-	fmt.Println("=========================================================\n")
+func differentBits(a, b []byte) int {
+	count := 0
+	for i := range a {
+		count += bits.OnesCount8(a[i] ^ b[i])
+	}
+	return count
+}
 
-	t0 := 20 // Инициализационный вектор (начальное состояние генератора)
-	cipher := NewGammaCipher(t0)
+func experiment(d *DES, text string, iv []byte, k, bit int) error {
+	plain := []byte(text)
+	encrypted, err := d.CryptCFB(plain, iv, k, false)
+	if err != nil {
+		return err
+	}
+	recovered, err := d.CryptCFB(encrypted, iv, k, true)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Открытый текст: %q\nОткрытый текст (HEX): %X\n", text, plain)
+	fmt.Printf("Шифрограмма CFB-%d (HEX): %X\n", k, encrypted)
+	fmt.Printf("Восстановленный текст: %q\nСовпадение: %t\n", recovered, bytes.Equal(plain, recovered))
+	if !bytes.Equal(plain, recovered) {
+		return errors.New("исходный текст не восстановлен")
+	}
+	fmt.Println("Сравнение по группам из 8 байтов (последняя может быть короче):")
+	for i := 0; i < len(plain); i += 8 {
+		end := i + 8
+		if end > len(plain) {
+			end = len(plain)
+		}
+		fmt.Printf("Группа %d: M=%X C=%X\n", i/8+1, plain[i:end], encrypted[i:end])
+	}
+	if len(plain) == 0 {
+		fmt.Println("Пустая шифрограмма: опыт с изменением бита пропущен.")
+		return nil
+	}
+	changed, err := flipBit(encrypted, bit)
+	if err != nil {
+		return err
+	}
+	damaged, err := d.CryptCFB(changed, iv, k, true)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Изменён бит %d (с нуля, от старшего бита первого байта).\n", bit)
+	fmt.Printf("Искажённая шифрограмма (HEX): %X\nИскажённый открытый текст (HEX): %X\n", changed, damaged)
+	for i := 0; i < len(plain); i += 8 {
+		end := i + 8
+		if end > len(plain) {
+			end = len(plain)
+		}
+		fmt.Printf("Группа %d: изменилось %d из %d бит\n", i/8+1, differentBits(plain[i:end], damaged[i:end]), (end-i)*8)
+	}
+	if len(plain) >= 16 && bytes.Equal(plain[:8], plain[8:16]) {
+		fmt.Printf("Первые открытые группы равны: да; соответствующие шифрогруппы равны: %t\n", bytes.Equal(encrypted[:8], encrypted[8:16]))
+	}
+	return nil
+}
 
-	fmt.Print("Введите открытый текст:\n> ")
-	reader := bufio.NewReader(os.Stdin)
-	plaintext, _ := reader.ReadString('\n')
-	
-	// Очищаем от символов переноса строки (поддерживает и Windows, и Linux)
-	plaintext = strings.TrimRight(plaintext, "\r\n")
-
-	// Шифруем текст
-	ciphertext, gamma := cipher.Encrypt(plaintext)
-
-	// Перед дешифрованием сбрасываем генератор на начальное состояние t0
-	cipher.Reset()
-	decrypted := cipher.Decrypt(ciphertext, gamma)
-
-	// --- Блок вывода результатов пользователю ---
-	fmt.Println("\n--- Результаты ---")
-	fmt.Printf("Открытый текст: %s\n\n", plaintext)
-
-	fmt.Println("Гамма (значения состояний):")
-	for i, g := range gamma {
-		fmt.Printf("%3d ", g)
-		if (i+1)%20 == 0 { // Перенос строки каждые 20 элементов
-			fmt.Println()
+func run() error {
+	text := flag.String("text", "", "открытый текст; без параметра вводится одна строка")
+	key := flag.String("key", "133457799BBCDFF1", "ключ из 16 HEX-символов")
+	k := flag.Int("k", 8, "размер сегмента CFB от 2 до 62 бит")
+	bit := flag.Int("bit", 0, "индекс изменяемого бита с нуля")
+	flag.Parse()
+	provided := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "text" {
+			provided = true
+		}
+	})
+	if !provided {
+		fmt.Println("Введите открытый текст (пустой ввод — демонстрационный пример):")
+		scanner := bufio.NewScanner(os.Stdin)
+		scanner.Buffer(make([]byte, 4096), 4*1024*1024)
+		if scanner.Scan() {
+			*text = scanner.Text()
+		}
+		if err := scanner.Err(); err != nil {
+			return err
+		}
+		if *text == "" {
+			*text = demoText
 		}
 	}
-	fmt.Println()
+	d, err := NewDES(*key)
+	if err != nil {
+		return err
+	}
+	iv := GenerateIV()
+	fmt.Printf("Лабораторная №6. DES CFB-%d. Вариант 25\n", *k)
+	fmt.Printf("Ключ: %s\nПСЧ: A=21 C=33 T(0)=20 B=256\nIV=T(0)..T(7): %X\n", strings.ToUpper(*key), iv)
+	if err := experiment(d, *text, iv, *k, *bit); err != nil {
+		return err
+	}
+	if *text != demoText {
+		fmt.Println("\nОтдельный опыт с одинаковыми блоками и изменением бита 10:")
+		return experiment(d, demoText, iv, *k, 10)
+	}
+	return nil
+}
 
-	fmt.Printf("\nШифртекст (HEX)      : %x\n", ciphertext) // Выводим в HEX, т.к. символы могут быть нечитаемыми
-	fmt.Printf("Шифртекст (Символы)  : %s\n", ciphertext)
-	fmt.Printf("Дешифрованный текст  : %s\n", decrypted)
-
-	// Валидация алгоритма
-	if plaintext == decrypted {
-		fmt.Println("\nСтатус: Дешифрование прошло успешно!")
-	} else {
-		fmt.Println("\nСтатус: Ошибка дешифрования!")
+func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, "Ошибка:", err)
+		os.Exit(1)
 	}
 }
